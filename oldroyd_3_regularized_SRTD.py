@@ -32,12 +32,13 @@ from meshdata import gen_mesh_jb
 import os
 
 class Results:
-    def __init__(self, converged, velocity, aux_pressure, pressure, stress_tensor, residuals, Newton_iters):
+    def __init__(self, converged, velocity, aux_pressure, pressure, stress_tensor, stress_tensor_vec, residuals, Newton_iters):
         self.converged = converged
         self.velocity = velocity
         self.aux_pressure = aux_pressure
         self.pressure = pressure
         self.stress_tensor = stress_tensor
+        self.stress_tensor_vec = stress_tensor_vec
         self.residuals = residuals
         self.Newton_iters = Newton_iters
 
@@ -234,6 +235,7 @@ def oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iter, tol, epsilon):
             pi_return = pi1
             p_return = p1
             T_return = T1
+            T_return_vec = T1_vec
 
         print("SRTD Iteration %d: r = %.4e (tol = %.3e)" % (n, l2diff, tol))
         n = n+1
@@ -248,7 +250,7 @@ def oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iter, tol, epsilon):
         converged = True
     else:
         converged = False
-    return Results(converged, u_return, pi_return, p_return, T_return, residuals, Newton_iters)
+    return Results(converged, u_return, pi_return, p_return, T_return, T_return_vec, residuals, Newton_iters)
 
 
 # Lid-Driven Cavity Problem
@@ -407,6 +409,7 @@ def oldroyd_3_LDC_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
             u_return = u1
             pi_return = pi1
             p_return = p1
+            T_return_vec = T1_vec
             T_return = T1
 
         print("SRTD Iteration %d: r = %.4e (tol = %.3e)" % (n, l2diff, tol))
@@ -422,7 +425,7 @@ def oldroyd_3_LDC_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
         converged = True
     else:
         converged = False
-    return Results(converged, u_return, pi_return, p_return, T_return, residuals, Newton_iters)
+    return Results(converged, u_return, pi_return, p_return, T_return, T_return_vec, residuals, Newton_iters)
 
      
 def oldroyd_3_LDC3D_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
@@ -536,7 +539,7 @@ def oldroyd_3_LDC3D_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
     nse_prm["nonlinear_solver"] = "newton"
     nse_prm["newton_solver"]["linear_solver"] = "mumps" # utilizes parallel processors
 
-    # Regularized Pressure transport equation. Returns to original transport equation if epsilon=0
+    # Regularized Pressure transport equation (p,r). Returns to original transport equation if epsilon=0
     ap = (epsilon*dot(grad(p), grad(r)) + (p + l1*dot(grad(p), u1)) * r )* dx 
     Lp = pi1 * r * dx 
     
@@ -545,9 +548,9 @@ def oldroyd_3_LDC3D_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
     p_solver = LinearVariationalSolver(p_problem)
 
     
-    # Stress transport equation/Constitutive equation
-    aT = inner( tau + l1*(dot(grad(tau),u1) + dot(-skew(grad(u1)), tau) - dot(tau, -skew(grad(u1)))) \
-                        - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S)*dx
+    # Regularized Stress transport equation/Constitutive equation (tau, S)
+    aT = (epsilon*inner(grad(tau), grad(S)) + inner( tau + l1*(dot(grad(tau),u1) + dot(-skew(grad(u1)), tau) - dot(tau, -skew(grad(u1)))) \
+                        - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S))*dx
     LT = 2.0*eta*inner(sym(grad(u1)), S)*dx
 
     T_problem = LinearVariationalProblem(aT, LT, T1_vec) # will update T1_vec values every time we call solver.solve()
