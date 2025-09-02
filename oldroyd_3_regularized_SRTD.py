@@ -29,6 +29,7 @@
 
 from fenics import *
 from meshdata import gen_mesh_jb
+from meshdata import gen_mesh_cylinder
 import os
 
 class Results:
@@ -42,6 +43,58 @@ class Results:
         self.residuals = residuals
         self.Newton_iters = Newton_iters
 
+
+# Flow past a cylinder problem
+
+def oldroyd_3_cyl_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
+    # h is the meshsize
+    # s is the inflow speed (maybe)
+    # eta is the kinematic viscosity
+    # l1 is lambda1, the relaxation time
+    # mu1 is the parameter related to the slip parameter a, a = mu1/l1
+    # max_iter is the maximum number of srtd iters (usually 20 is a good number)
+    # tol is the absolute tolerance (usually around 1e-8 is a good number)
+    # epsilon is the regularization parameter
+
+    # geometry parameters. Doubtful I'll let these be function arguments
+    height = 1.0
+    width = 4.0
+    cyl_rad = 0.5
+    cyl_center = (1.5, 0.0)
+
+    meshfile = "meshdata/flow_cylinder_h_%.4e.h5"%h
+    
+    if not os.path.exists(meshfile):
+        print("Creating mesh...")
+        gen_mesh_cylinder.main(h)
+
+    #then, simply read the mesh in 
+    mesh = Mesh() #empty mesh
+    infile = HDF5File(MPI.comm_world, meshfile, 'r')
+    infile.read(mesh, '/mesh', True) #for some reason, need this flag to import a mesh?
+    infile.close()
+    print("Mesh loaded into FEniCS")
+
+    # probably won't use Cylinder() or Outflow() explicitly
+    class Cylinder(SubDomain):
+        def inside(self, x, on_boundary):
+            dist = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1])
+            return (on_boundary and dist <= cyl_rad*cyl_rad+h)
+        
+    class Inflow(SubDomain):
+        def inside(self, x, on_boundary):
+            return (on_boundary and near(x[0], 0.0))
+    
+    class Outflow(SubDomain):
+        def inside(self, x, on_boundary):
+            return (on_boundary and near(x[0], width))
+    
+    class Walls(SubDomain):
+        def inside(self, x, on_boundary):
+            ceiling = near(x[1], height)
+            floor = near(x[1], 0.0)
+            cyl_bndry = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1]) < cyl_rad*cyl_rad+h
+            return on_boundary and (ceiling or floor or cyl_bndry) and (not near(x[0], 0.0) or near(x[0], width)) 
 
 # Journal Bearing Problem
 

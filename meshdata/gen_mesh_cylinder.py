@@ -1,7 +1,8 @@
-# Generates the journal-bearing problem mesh, or eccentric
-#   rotating cylinders geometry with Gmsh for use in Fenics.
+# Generates the mesh for flow past a cylinder, or more like half of
+#   it, since the cylinder will only look like a bump
 #   Actually accepts a meshsize parameter h instead of 
 #   whatever meshsize/mesh density parameter Fenics uses lol
+
 
 import gmsh
 import sys
@@ -10,65 +11,75 @@ from fenics import *
 import matplotlib.pyplot as plt
 
 
-def main(h, inner_radius, ecc):
+def main(h):
     gmsh.initialize() # must be done first
 
     # Create new gmsh model
-    filename = "journal_bearing_h_%.4e"%h
-    filepath = "meshdata/" + filename
+    filename = "flow_cylinder_h_%.4e"%h
+    filepath = "meshdata/" + filename # since this will usually be called by actual functions outside /meshdata
     
     gmsh.model.add(filename)
 
     # shortcut. Didn't know Python could do this lol
     factory = gmsh.model.geo
+
+    height = 1.0
+    width = 4.0
+    cyl_rad = 0.5
+    cyl_center = (1.5, 0.0)
+
+    # b = bottom
+    # l = left
+    # t = top
+    # r = right
+
+    # mark corners of tube 
+    bl_pt = factory.addPoint(0.0, 0.0, 0.0, h)
+    tl_pt = factory.addPoint(0.0, height, 0.0, h)
+    tr_pt = factory.addPoint(width, height, 0.0, h)
+    br_pt = factory.addPoint(width, 0.0, 0.0, h)
+
+    #mark corners of cylinder
+    t_cyl_pt = factory.addPoint(cyl_center[0], cyl_center[1]+cyl_rad, 0.0, h)
+    r_cyl_pt = factory.addPoint(cyl_center[0]+cyl_rad, cyl_center[1], 0.0, h)
+    b_cyl_pt = factory.addPoint(cyl_center[0], cyl_center[1]-cyl_rad, 0.0, h)
+    l_cyl_pt = factory.addPoint(cyl_center[0]-cyl_rad, cyl_center[1], 0.0, h)
+
+    # need to encode center as gmsh point 
+    cyl_center_pt = factory.addPoint(cyl_center[0], cyl_center[1], 0.0, h)
     
-    outer_radius = 1.0
+    # add boundary curves, going cc-wise
+    l_wall = factory.addLine(bl_pt, tl_pt)
+    t_wall = factory.addLine(tl_pt, tr_pt)
+    r_wall = factory.addLine(tr_pt, br_pt)
+
+    br_wall = factory.addLine(br_pt, r_cyl_pt)
+    ne_cyl_arc = factory.addCircleArc(r_cyl_pt, cyl_center_pt, t_cyl_pt)
+    nw_cyl_arc = factory.addCircleArc(t_cyl_pt, cyl_center_pt, l_cyl_pt)
+    bl_wall = factory.addLine(l_cyl_pt, bl_pt)
+
+    # add closed boundary loop
+    boundary_loop = factory.addCurveLoop([l_wall, t_wall, r_wall, br_wall, ne_cyl_arc, nw_cyl_arc, bl_wall])
     
-    outer_center = (0.0, 0.0)
-    inner_center = (0.0, -ecc)
-
-    # addPoint() takes in x,y,z coordinates, opt. meshsize, and and opt. tag. If tag<0, sets automatically
-    outer_center_pt = factory.addPoint(outer_center[0], outer_center[1], 0.0) 
-    inner_center_pt = factory.addPoint(inner_center[0], inner_center[1], 0.0)
-
-    # Mark NESW of inner and outer circles
-    outer_n_pt = factory.addPoint(outer_center[0], outer_center[1]+outer_radius, 0.0, h) # North-most point
-    outer_e_pt = factory.addPoint(outer_center[0]+outer_radius, outer_center[1], 0.0, h) # East-most point
-    outer_s_pt = factory.addPoint(outer_center[0], outer_center[1]-outer_radius, 0.0, h)
-    outer_w_pt = factory.addPoint(outer_center[0]-outer_radius, outer_center[1], 0.0, h)
-    outer_points = [outer_n_pt, outer_e_pt, outer_s_pt, outer_w_pt]
-
-    inner_n_pt = factory.addPoint(inner_center[0], inner_center[1]+inner_radius, 0.0, h)
-    inner_e_pt = factory.addPoint(inner_center[0]+inner_radius, inner_center[1], 0.0, h)
-    inner_s_pt = factory.addPoint(inner_center[0], inner_center[1]-inner_radius, 0.0, h) 
-    inner_w_pt = factory.addPoint(inner_center[0]-inner_radius, inner_center[1], 0.0, h)
-    inner_points = [inner_n_pt, inner_e_pt, inner_s_pt, inner_w_pt]
+    # add domain interior (plane surface)
+    domain_surface = factory.addPlaneSurface([boundary_loop])
 
 
-    # Add circle arcs. Must be less than pi, apparently, so we chop cirlce up into 4 arcs. Could have done 3 with trig
-    outer_arcs = [0,0,0,0]
-    inner_arcs = [0,0,0,0]
-    for i in range(4):
-        outer_arcs[i] =  factory.addCircleArc(outer_points[i], outer_center_pt, outer_points[(i+1)%4])
-        inner_arcs[i] =  factory.addCircleArc(inner_points[i], inner_center_pt, inner_points[(i+1)%4])
-            
-    outer_loop = factory.addCurveLoop(outer_arcs)
-    inner_loop = factory.addCurveLoop(inner_arcs)
+    # give some convenient names to things. Need to synchronize first, I think? 
+    gmsh.model.geo.synchronize()
 
-    # outer_surface = factory.addPlaneSurface([outer_loop]) # is this needed?
-    # Per the docs: The first curve loop defines the exterior contour; additional curve loop define holes.
-    domain_surface = factory.addPlaneSurface([outer_loop, inner_loop])
+    inflow_bndry_grp = factory.addPhysicalGroup(1, [l_wall])
+    gmsh.model.setPhysicalName(1, inflow_bndry_grp, "Inflow")
 
-    # Define boundaries (or any other marked parts of the mesh). For journal-bearing, there are 2
-    outer_bndry_grp = gmsh.model.addPhysicalGroup(1, [outer_loop])
-    gmsh.model.setPhysicalName(1, outer_bndry_grp, "outer_boundary")
+    outflow_bndry_grp = factory.addPhysicalGroup(1, [r_wall])
+    gmsh.model.setPhysicalName(1, outflow_bndry_grp, "Outflow")
 
-    inner_bndry_grp = gmsh.model.addPhysicalGroup(1, [inner_loop])
-    gmsh.model.setPhysicalName(1, inner_bndry_grp, "inner_boundary")
+    cyl_bndry_grp = factory.addPhysicalGroup(1, [ne_cyl_arc, nw_cyl_arc])
+    gmsh.model.setPhysicalName(1, cyl_bndry_grp, "Cylinder")
 
-    domain_grp = gmsh.model.addPhysicalGroup(2, [domain_surface])
+    domain_grp = factory.addPhysicalGroup(2, [domain_surface])
     gmsh.model.setPhysicalName(2, domain_grp, "Domain")
-    
+
     # Synchronize the CAD (.geo) entities with the model
     gmsh.model.geo.synchronize()
 
@@ -86,12 +97,12 @@ def main(h, inner_radius, ecc):
     # Always run this at the end
     gmsh.finalize()
     
-
+    
     ##########################################################
     ####    Gmsh construction is over, now on to Fenics   ####
     ##########################################################
-    
-    
+
+    # Now, we need to make sure this mesh plays nicely with FEniCS
     # This function was recommended by Dokken in:
     # https://jsdokken.com/src/pygmsh_tutorial.html, "Mesh generation and conversion with GMSH and PYGMSH"
     def create_mesh(mesh, cell_type, prune_z=False):
@@ -105,7 +116,7 @@ def main(h, inner_radius, ecc):
         
         return out_mesh
     
-    # Read the Gmsh mesh
+    # Read the recently created Gmsh mesh
     msh = meshio.read(filepath + ".msh")
 
     # Create 2D mesh. "True" flag since it's a 2D mesh
@@ -145,7 +156,14 @@ def main(h, inner_radius, ecc):
     outfile = HDF5File(MPI.comm_world, filepath + ".h5", 'w')
     outfile.write(mymesh, '/mesh')
     outfile.close()
-    
+
+
+    ##########################################################
+    ####   FEniCS mesh cooperation is over, we are done   ####
+    ##########################################################
+
+    # Optional testing for FEniCS cooperation:
+
     """
     # Run this to recover the mesh from .h5 file for use in FEniCS:
     mesh2 = Mesh() #empty mesh
@@ -160,42 +178,44 @@ def main(h, inner_radius, ecc):
     P_elem = FiniteElement("CG", triangle, 1)
     P = FunctionSpace(mesh2, P_elem)
     
-    rad = inner_radius
     # Boundaries of domain. The issue with triangles is that they always undershoot circles, at least here
-    class Inner(SubDomain):
+
+    class Cylinder(SubDomain):
         def inside(self, x, on_boundary):
-            radius = x[0]*x[0] + (x[1]+ecc)*(x[1]+ecc)
-            return (on_boundary and radius <= rad*rad+h)
-    
-    class Outer(SubDomain):
+            dist = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1])
+            return (on_boundary and dist <= cyl_rad*cyl_rad+h)
+        
+    class Inflow(SubDomain):
         def inside(self, x, on_boundary):
-            # on_boundary and opposite of inner lol
-            radius = x[0]*x[0] + (x[1]+ecc)*(x[1]+ecc)
-            return (on_boundary and radius > rad*rad+h)
+            return (on_boundary and near(x[0], 0.0))
     
-    class TopPoint(SubDomain):
+    class Outflow(SubDomain):
         def inside(self, x, on_boundary):
-            return (near(x[0], 0.0) and near(x[1], 1.0))
+            return (on_boundary and near(x[0], width))
+
+    class Walls(SubDomain):
+        def inside(self, x, on_boundary):
+            ceiling = near(x[1], height)
+            floor = near(x[1], 0.0)
+            cyl_bndry = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1]) < cyl_rad*cyl_rad+h
+            return on_boundary and (ceiling or floor or cyl_bndry) and (not (near(x[0], 0.0) or near(x[0], width)))
     
     
-    inner_bc = DirichletBC(P, Constant(1.0), Inner())
-    outer_bc = DirichletBC(P, Constant(-1.0),  Outer())
+    inflow_bc = DirichletBC(P, Constant(1.0),  Inflow())
+    outflow_bc = DirichletBC(P, Constant(2.0), Outflow())
+    cylinder_bc = DirichletBC(P, Constant(-1.0), Walls())
     
     test_func = Function(P)
-    inner_bc.apply(test_func.vector())
-    outer_bc.apply(test_func.vector())
+    cylinder_bc.apply(test_func.vector())
+    inflow_bc.apply(test_func.vector())
+    outflow_bc.apply(test_func.vector())
     
     fig = plot(test_func, title = "testing bc")
     plt.colorbar(fig)
     plt.show()
     """
-    
-    
 
+    
 # In case it's called from command line
 if __name__ == '__main__':
-    main(float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]))
-    
-
-
-
+    main(float(sys.argv[1]))
