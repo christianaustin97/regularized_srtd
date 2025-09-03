@@ -13,11 +13,12 @@ s = 1.0
 eta = 1.0
 l1 = 1e-2
 a = 1.0 # UCM model
+#a = -1.0 # LCM model
 mu1 = a*l1
 max_iters = 20
 tol = 1e-8
 
-"""
+
 # FPC Problem
 print("Solving the unregularized solution")
 print("\n ========================================================================================================================== \n")
@@ -33,15 +34,19 @@ T_22 = T_unreg[2]
 
 plt.figure()
 
-plt.subplot(2,2,1)
+#plt.subplot(2,2,1)
 magplot = plot(u_mag)
 plt.colorbar(magplot)
 plt.title("Squared Magnitude of $\mathbf{u}$")
+plt.show()
+input("Press any key to continue...")
 
-plt.subplot(2,2,2)
+plt.figure() #plt.subplot(2,2,2)
 pplot = plot(p_unreg)
 plt.title("Pressure")
 plt.colorbar(pplot)
+plt.show()
+input("Press any key to continue...")
 
 plt.subplot(2,2,3)
 plot(T_11)
@@ -136,7 +141,7 @@ plt.ylabel("$\mathbf{T}$ $ H^{1}$ difference")
 
 plt.show()
 
-
+"""
 
 
 

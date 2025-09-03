@@ -46,9 +46,9 @@ class Results:
 
 # Flow past a cylinder problem
 
-def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
+def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     # h is the meshsize
-    # C is pressure gradient on the inflow, directly prop. to inflow velocity
+    # k is such that -k^2 is pressure gradient on the inflow, directly prop. to inflow velocity
     # eta is the kinematic viscosity
     # l1 is lambda1, the relaxation time
     # mu1 is the parameter related to the slip parameter a, a = mu1/l1
@@ -62,7 +62,7 @@ def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
     cyl_rad = 0.5
     cyl_center = (1.5, 0.0)
 
-    C = 2.5 # pressure gradient 
+    k = 2.5 # pressure gradient 
 
     a = mu1/l1
 
@@ -98,25 +98,25 @@ def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
             ceiling = near(x[1], height)
             floor = near(x[1], 0.0)
             cyl_bndry = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1]) < cyl_rad*cyl_rad+h
-            return on_boundary and (ceiling or floor or cyl_bndry) and (not near(x[0], 0.0) or near(x[0], width)) 
+            return on_boundary and (ceiling or floor or cyl_bndry) and not( near(x[0], 0.0) or near(x[0], width) ) 
         
     class TopPoint(SubDomain):
         # for pressure regulating
         def inside(self, x, on_boundary):
-            return (near(x[0], 0.0) and near(x[1], height))
+            return (on_boundary and near(x[0], 0.0) and near(x[1], 0.0))
 
     # velocity boundary data
-    u_1_inlet = Expression("C*x[1]*(1-x[1])/(2*eta)", C=C, eta=eta, degree=2)
+    u_1_inlet = Expression("k*k*x[1]*(1-x[1])/(2*eta)", k=k, eta=eta, degree=2)
     u_inlet = Expression(("u", "0.0"), u=u_1_inlet, degree = 2)
     u_walls = Constant((0.0, 0.0))
 
-    # do we need pressure boundary data? I think so. Is this 0 or C? C is the gradient, so p=Cx, so 0 at x=0
-    p_inlet = Constant(0.0)
+    # true pressure boundary data
+    p_inlet = Expression("(a-1)*l1*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta) - k*k*x[0]", a=a, l1=l1, k=k, eta=eta, degree=2)
 
-    T_11 = Expression("(a+1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
-    T_12 = Expression("-C*(2*x[1]-1)/2", C=C, degree=2)
-    T_22 = Expression("(a-1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
-    #T_22 = Expression("0.0", degree=2)
+    # stress boundary data
+    T_11 = Expression("(a+1)*l1*k*k*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, k=k, eta=eta, degree=2)
+    T_12 = Expression("k*k*(1-2*x[1])/2", k=k, degree=2)
+    T_22 = Expression("(a-1)*l1*k*k*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, k=k, eta=eta, degree=2)
     T_inlet = Expression(("T_11", "T_12", "T_22"), T_11=T_11, T_12=T_12, T_22=T_22, degree=2)
 
     # body forces
@@ -137,20 +137,22 @@ def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
     # Interpolate body force and BCs onto velocity FE space
     u_inlet = interpolate(u_inlet, Wspace.sub(0).collapse()) 
     u_walls = interpolate(u_walls, Wspace.sub(0).collapse())
-    p_inlet = interpolate(p_inlet, Pspace) # true pressure transport equation
-    T_inlet_vec = interpolate(T_inlet, Tspace) # stress transport equation
+    # true pressure transport equation
+    p_inlet = interpolate(p_inlet, Pspace) 
+    # stress transport equation
+    T_inlet_vec = interpolate(T_inlet, Tspace) 
 
     f = interpolate(f, Wspace.sub(0).collapse())
 
-    # Define boundary conditions
+    # Define boundary conditions for velocity and auxiliary pressure
     bcu_inlet = DirichletBC(Wspace.sub(0), u_inlet, Inflow())
     bcu_walls = DirichletBC(Wspace.sub(0), u_walls, Walls())
     bcAux_press = DirichletBC(Wspace.sub(1), Constant(0.0), TopPoint(), 'pointwise')
-    bcu = [bcu_inlet, bcu_walls, bcAux_press]
+    #bcu = [bcu_inlet, bcu_walls, bcAux_press]
+    bcu = [bcu_inlet, bcu_walls]
 
-    #bcp_inlet = DirichletBC(Pspace, p_inlet, Inflow())
-    #bcp = [bcp_inlet]
-
+    bcp_inlet = DirichletBC(Pspace, p_inlet, Inflow())
+    bcp = [bcp_inlet]
 
     bcT_inlet = DirichletBC(Tspace, T_inlet_vec, Inflow())
     bcT = [bcT_inlet]
@@ -220,8 +222,8 @@ def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
     Lp = pi1 * r * dx 
     
     p1 = Function(Pspace)
-    #p_problem = LinearVariationalProblem(ap, Lp, p1, bcp) # will update p1 values every time we call solver.solve()
-    p_problem = LinearVariationalProblem(ap, Lp, p1) # will update p1 values every time we call solver.solve()
+    p_problem = LinearVariationalProblem(a=ap, L=Lp, u=p1, bcs = bcp) # will update p1 values every time we call solver.solve()
+    #p_problem = LinearVariationalProblem(ap, Lp, p1) # will update p1 values every time we call solver.solve()
     p_solver = LinearVariationalSolver(p_problem)
 
     # Stress transport equation/Constitutive equation
@@ -229,7 +231,7 @@ def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
                         - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S)*dx
     LT = 2.0*eta*inner(sym(grad(u1)), S)*dx
 
-    T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcT) # will update T1_vec values every time we call solver.solve()
+    T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcs = bcT) # will update T1_vec values every time we call solver.solve()
     T_solver = LinearVariationalSolver(T_problem)
     T_prm = T_solver.parameters
     T_prm["linear_solver"] = "mumps"
