@@ -6,7 +6,7 @@ import oldroyd_3_regularized_SRTD
 import matplotlib.pyplot as plt
 
 
-h=0.05 
+h=0.025 
 rad = 0.5
 ecc = 0.25
 s = 1.0
