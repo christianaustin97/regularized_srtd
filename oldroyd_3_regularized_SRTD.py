@@ -46,9 +46,9 @@ class Results:
 
 # Flow past a cylinder problem
 
-def oldroyd_3_cyl_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
+def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
     # h is the meshsize
-    # s is the inflow speed (maybe)
+    # C is pressure gradient on the inflow, directly prop. to inflow velocity
     # eta is the kinematic viscosity
     # l1 is lambda1, the relaxation time
     # mu1 is the parameter related to the slip parameter a, a = mu1/l1
@@ -61,6 +61,10 @@ def oldroyd_3_cyl_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
     width = 4.0
     cyl_rad = 0.5
     cyl_center = (1.5, 0.0)
+
+    C = 2.5 # pressure gradient 
+
+    a = mu1/l1
 
     meshfile = "meshdata/flow_cylinder_h_%.4e.h5"%h
     
@@ -75,7 +79,7 @@ def oldroyd_3_cyl_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
     infile.close()
     print("Mesh loaded into FEniCS")
 
-    # probably won't use Cylinder() or Outflow() explicitly
+    # Define key boundaries. probably won't use Cylinder() or Outflow() explicitly
     class Cylinder(SubDomain):
         def inside(self, x, on_boundary):
             dist = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1])
@@ -95,6 +99,194 @@ def oldroyd_3_cyl_reg_SRTD(h, s, eta, l1, mu1, max_iter, tol, epsilon):
             floor = near(x[1], 0.0)
             cyl_bndry = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1]) < cyl_rad*cyl_rad+h
             return on_boundary and (ceiling or floor or cyl_bndry) and (not near(x[0], 0.0) or near(x[0], width)) 
+        
+    class TopPoint(SubDomain):
+        # for pressure regulating
+        def inside(self, x, on_boundary):
+            return (near(x[0], 0.0) and near(x[1], height))
+
+    # velocity boundary data
+    u_1_inlet = Expression("C*x[1]*(1-x[1])/(2*eta)", C=C, eta=eta, degree=2)
+    u_inlet = Expression(("u", "0.0"), u=u_1_inlet, degree = 2)
+    u_walls = Constant((0.0, 0.0))
+
+    # do we need pressure boundary data? I think so. Is this 0 or C? C is the gradient, so p=Cx, so 0 at x=0
+    p_inlet = Constant(0.0)
+
+    T_11 = Expression("(a+1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
+    T_12 = Expression("-C*(2*x[1]-1)/2", C=C, degree=2)
+    T_22 = Expression("(a-1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
+    #T_22 = Expression("0.0", degree=2)
+    T_inlet = Expression(("T_11", "T_12", "T_22"), T_11=T_11, T_12=T_12, T_22=T_22, degree=2)
+
+    # body forces
+    f = Constant((0.0, 0.0)) # no body forces
+    
+    # Element spaces
+    P_elem = FiniteElement("CG", triangle, 1) # Pressure and auxiliary pressure, degree 1 elements
+    V_elem = VectorElement("CG", triangle, 2) # Velocity, degree 2 elements
+    T_elem = VectorElement("CG", triangle, 2, dim=3) # Stress tensor in 2D has 3 independent components
+    
+    W_elem = MixedElement([V_elem, P_elem]) # Mixed/Taylor Hood element space for Navier-Stokes type equations
+
+    Wspace = FunctionSpace(mesh, W_elem) # Taylor-Hood/mixed space
+    Pspace = FunctionSpace(mesh, P_elem) # true pressure space
+    Vspace = FunctionSpace(mesh, V_elem) # velocity space 
+    Tspace = FunctionSpace(mesh, T_elem) # tensor space
+    
+    # Interpolate body force and BCs onto velocity FE space
+    u_inlet = interpolate(u_inlet, Wspace.sub(0).collapse()) 
+    u_walls = interpolate(u_walls, Wspace.sub(0).collapse())
+    p_inlet = interpolate(p_inlet, Pspace) # true pressure transport equation
+    T_inlet_vec = interpolate(T_inlet, Tspace) # stress transport equation
+
+    f = interpolate(f, Wspace.sub(0).collapse())
+
+    # Define boundary conditions
+    bcu_inlet = DirichletBC(Wspace.sub(0), u_inlet, Inflow())
+    bcu_walls = DirichletBC(Wspace.sub(0), u_walls, Walls())
+    bcAux_press = DirichletBC(Wspace.sub(1), Constant(0.0), TopPoint(), 'pointwise')
+    bcu = [bcu_inlet, bcu_walls, bcAux_press]
+
+    #bcp_inlet = DirichletBC(Pspace, p_inlet, Inflow())
+    #bcp = [bcp_inlet]
+
+
+    bcT_inlet = DirichletBC(Tspace, T_inlet_vec, Inflow())
+    bcT = [bcT_inlet]
+
+    # Variational Problem Begin
+    #
+    # Trial Functions. Think of TrialFunctions as symbolic, and they are only used in defining the weak forms
+    w = TrialFunction(Wspace) # our NS-like TrialFunction
+    (u,pi) = split(w) # trial functions, representing u1, pi1
+    p = TrialFunction(Pspace) # true pressure trial function for auxiliary pressure equation, representing p1
+    tau_vec = TrialFunction(Tspace) # stress trial function for stress tensor equation, representing T1
+    tau = as_tensor([[tau_vec[0], tau_vec[1]], [tau_vec[1], tau_vec[2]]])
+
+    # Weak form test functions. Also think of these as symbolic, and they are only used in defining the weak forms
+    (v, q) = TestFunctions(Wspace) # test functions for NSE step
+    r = TestFunction(Pspace) # test functions for pressure transport
+    S_vec = TestFunction(Tspace) # test functions for constitutive equation
+    S = as_tensor([[S_vec[0], S_vec[1]], [S_vec[1], S_vec[2]]])
+
+    # previous and next iterations. Symbolic when they are used in the weak forms, or pointers to the actual function values 
+    #w0 = Function(W)
+    u0 = Function(Vspace)    
+    #pi0 = Function(P)
+    p0 = Function(Pspace)
+    T0_vec = Function(Tspace)
+    T0 = as_tensor([[T0_vec[0], T0_vec[1]], [T0_vec[1], T0_vec[2]]])
+
+    w1 = Function(Wspace)
+    u1 = Function(Vspace)
+    pi1 = Function(Pspace)
+    p1 = Function(Pspace)
+    T1_vec = Function(Tspace)
+    
+    # Functions we'll actually return,
+    u_return = Function(Vspace)
+    pi_return = Function(Pspace)
+    p_return = Function(Pspace)
+    T_return_vec = Function(Tspace)
+    T_return = as_tensor([[T_return_vec[0], T_return_vec[1]], [T_return_vec[1], T_return_vec[2]]])
+
+    #LHS of NS-like solve, a((u,pi), (v,q)) 
+    a_nse = eta*inner(grad(u), grad(v))*dx + dot( dot(grad(u),u), v)*dx - (pi*div(v))*dx + q*div(u)*dx
+
+    # RHS of NS-like stage is given in section 7 of Girault/Scott paper F((v,q); u0, T0)
+    term1 = inner(f, v - l1*dot(grad(v), u0))*dx #orange term
+    term2 = (p0*inner(nabla_grad(u0), grad(v)))*dx  #blue term
+    term3 = -inner( dot(grad(u0),u0) , dot(grad(v),u0) )*dx #red term
+    term4 = inner( dot(grad(u0),T0) , grad(v) )*dx #light green term
+    term5 = inner( dot(sym(grad(u0)),T0)+dot(T0,sym(grad(u0))) , grad(v) )*dx #dark green term
+    
+    L_nse = term1 - l1*(term2 + term3 + term4) + (l1-mu1)*term5 #mathcal F 
+    
+    # Nonlinear in u, so must solve a-L==0 and use Newton instead of a==L directly
+    F = a_nse - L_nse
+
+    # Nonlinear NSE, so using Newton iteration
+    F_act = action(F, w1) 
+    dF = derivative(F_act, w1)
+    nse_problem = NonlinearVariationalProblem(F_act, w1, bcu, dF) # will update w1 values every time we call solver.solve()
+    nse_solver = NonlinearVariationalSolver(nse_problem)
+    nse_prm = nse_solver.parameters
+    nse_prm["nonlinear_solver"] = "newton"
+    nse_prm["newton_solver"]["linear_solver"] = "mumps" # utilizes parallel processors
+
+    # Regularized Pressure transport equation. Returns to original transport equation if epsilon=0
+    ap = (epsilon*dot(grad(p), grad(r)) + (p + l1*dot(grad(p), u1)) * r )* dx 
+    Lp = pi1 * r * dx 
+    
+    p1 = Function(Pspace)
+    #p_problem = LinearVariationalProblem(ap, Lp, p1, bcp) # will update p1 values every time we call solver.solve()
+    p_problem = LinearVariationalProblem(ap, Lp, p1) # will update p1 values every time we call solver.solve()
+    p_solver = LinearVariationalSolver(p_problem)
+
+    # Stress transport equation/Constitutive equation
+    aT = inner( tau + l1*(dot(grad(tau),u1) + dot(-skew(grad(u1)), tau) - dot(tau, -skew(grad(u1)))) \
+                        - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S)*dx
+    LT = 2.0*eta*inner(sym(grad(u1)), S)*dx
+
+    T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcT) # will update T1_vec values every time we call solver.solve()
+    T_solver = LinearVariationalSolver(T_problem)
+    T_prm = T_solver.parameters
+    T_prm["linear_solver"] = "mumps"
+
+    # Begin SRTD iterative solve
+    n=1
+    l2diff = 1.0
+    residuals = {} # empty dict to save residual value after each iteration 
+    Newton_iters = {}
+    min_residual = 1.0
+    while(n<=max_iter and min_residual > tol):
+        try: 
+            (Newton_iters[n], converged) = nse_solver.solve() # updates w1
+        except: 
+            print("Newton Method in the Navier-Stokes-like stage failed to converge")
+            return Results(False, u_return, pi_return, p_return, T_return, residuals, Newton_iters)
+        
+        u_next, pi_next = w1.split(deepcopy=True)
+        assign(u1, u_next) # u1 updated
+        assign(pi1, pi_next) # pi1 updated
+
+        p_solver.solve() # p1 updated
+
+        T_solver.solve() # T1_vec updated
+        T1 = as_tensor([[T1_vec[0], T1_vec[1]], [T1_vec[1], T1_vec[2]]]) # reshape to appropriate 
+
+        # End of this SRTD iteration
+        l2diff = errornorm(u1, u0, norm_type='l2', degree_rise=0)
+        residuals[n] = l2diff
+        if(l2diff <= min_residual):
+            min_residual = l2diff
+            u_return = u1
+            pi_return = pi1
+            p_return = p1
+            T_return = T1
+            T_return_vec = T1_vec
+
+        print("SRTD Iteration %d: r = %.4e (tol = %.3e)" % (n, l2diff, tol))
+        n = n+1
+        
+        #update u0, p0, T0
+        assign(u0, u1)
+        assign(p0, p1)
+        assign(T0_vec, T1_vec) # can't assign T1 to T0 as a tensor, unfortunately
+        
+    # Stuff to do after the iterations are over
+    if(min_residual <= tol):
+        converged = True
+    else:
+        converged = False
+    return Results(converged, u_return, pi_return, p_return, T_return, T_return_vec, residuals, Newton_iters)
+
+
+
+
+
+
 
 # Journal Bearing Problem
 
@@ -178,7 +370,7 @@ def oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iter, tol, epsilon):
     # Gather boundary conditions (any others would go here, separated by a comma)
     bcs = [bc_inner, bc_outer, bc_press] 
     
-   # Variational Problem Begin
+    # Variational Problem Begin
     #
     # Trial Functions. Think of TrialFunctions as symbolic, and they are only used in defining the weak forms
     w = TrialFunction(W) # our NS-like TrialFunction

@@ -1,10 +1,12 @@
 import numpy as np
 from fenics import errornorm
+from fenics import dot
+from fenics import plot
 import oldroyd_3_regularized_SRTD
 import matplotlib.pyplot as plt
 
 
-h=0.025 
+h=0.05 
 rad = 0.5
 ecc = 0.25
 s = 1.0
@@ -15,10 +17,50 @@ mu1 = a*l1
 max_iters = 20
 tol = 1e-8
 
+"""
+# FPC Problem
+print("Solving the unregularized solution")
+print("\n ========================================================================================================================== \n")
+soln_fpc_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 2.5, eta, l1, mu1, max_iters, tol, 0.0)
+u_unreg = soln_fpc_unreg.velocity
+p_unreg = soln_fpc_unreg.pressure
+T_unreg = soln_fpc_unreg.stress_tensor_vec
+
+u_mag = dot(u_unreg, u_unreg)
+T_11 = T_unreg[0]
+T_12 = T_unreg[1]
+T_22 = T_unreg[2]
+
+plt.figure()
+
+plt.subplot(2,2,1)
+magplot = plot(u_mag)
+plt.colorbar(magplot)
+plt.title("Squared Magnitude of $\mathbf{u}$")
+
+plt.subplot(2,2,2)
+pplot = plot(p_unreg)
+plt.title("Pressure")
+plt.colorbar(pplot)
+
+plt.subplot(2,2,3)
+plot(T_11)
+plt.title("Normal Stress Component $T_{11}$")
+
+plt.subplot(2,2,4)
+plot(T_12)
+plt.title("Shear Stress Component $T_{12}$")
+
+plt.show()
+
+input("Press any key to continue...")
+
+"""
 #unregularized SRTD solution
 print("Solving the unregularized solution")
 print("\n ========================================================================================================================== \n")
-soln_jb_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iters, tol, 0.0)
+#soln_jb_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iters, tol, 0.0)
+soln_jb_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 1.0, eta, l1, mu1, max_iters, tol, 0.0)
 
 u_unreg = soln_jb_unreg.velocity
 p_unreg = soln_jb_unreg.pressure
@@ -39,7 +81,8 @@ for i in range(n):
     
     print("\n ========================================================================================================================== \n")
     print("solving the regularized solution with eps = %1.3e"%(epsilon))
-    soln_jb_reg = oldroyd_3_regularized_SRTD.oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iters, tol, epsilon)
+    #soln_jb_reg = oldroyd_3_regularized_SRTD.oldroyd_3_JB_reg_SRTD(h, rad, ecc, s, eta, l1, mu1, max_iters, tol, epsilon)
+    soln_jb_reg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 1.0, eta, l1, mu1, max_iters, tol, epsilon)
     u_reg = soln_jb_reg.velocity
     p_reg = soln_jb_reg.pressure
     T_reg = soln_jb_reg.stress_tensor_vec
@@ -52,7 +95,7 @@ for i in range(n):
     T_h1_diff[i] = errornorm(T_unreg, T_reg, "h1")
 
 plt.figure()
-plt.title("Journal Bearing Problem")
+plt.title("Flow Past a Cylinder Problem")
 
 plt.subplot(2,3,1)
 plt.loglog(epsilon_vals, u_l2_diff)
