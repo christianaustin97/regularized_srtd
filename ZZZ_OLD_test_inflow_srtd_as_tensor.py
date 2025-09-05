@@ -13,8 +13,10 @@ a tensor. This is because using symmetric tensors is reportedly buggy
 from fenics import *
 import matplotlib.pyplot as plt
 
-nx = 32
-mesh = UnitSquareMesh(nx, nx, "crossed")
+nx = 24
+#mesh = UnitSquareMesh(nx, nx, "crossed")
+width = 4.0
+mesh = RectangleMesh(Point(0,0), Point(width,1), 4*nx, nx, "crossed")
 
 max_iter = 20
 tol = 1e-10
@@ -25,6 +27,7 @@ l1 = 1e-2
 mu1 = a*l1
 
 C = 5.0 # pressure gradient 
+D = (1.0-a)*l1*C*C/(4.0*eta_0) # arbitrary constant defining pressure
 
 #h= C /(8.0*nx) # for SUPG, characteristic (max) velocity = C/16, times meshsize (extra factor of 2 because "crossed")
 h=0.0 # unfortunately SUPG seems to make it worse lol
@@ -67,18 +70,45 @@ T_inlet_vec = interpolate(T_inlet, T)
 # body force
 f = interpolate(f, W.sub(0).collapse())
 
-# Define boundary conditions
-inflow = 'near(x[0], 0.0) && on_boundary'
-#inflow = '(near(x[0], 0.0) || near(x[0], 1.0)) && on_boundary' # both inlet and outlet
+# Define key boundaries
+class Inlet(SubDomain):
+        def inside(self, x, on_boundary):
+            return (near(x[0], 0.0) and on_boundary)
+inlet = 'near(x[0], 0.0) && on_boundary'
+
+class Outlet(SubDomain):
+    def inside(self, x, on_boundary):
+        return (near(x[0], 4.0) and on_boundary)
+outlet = 'near(x[0], 4.0) && on_boundary' 
+
+class Corner(SubDomain):
+        # for pressure regulating. DO NOT include "and on_boundary". idk why it just breaks everything
+        def inside(self, x, on_boundary):
+            return near(x[0], 0.0) and near(x[1], 1.0)
+corner = 'near(x[0], 0.0) && near(x[1], 1.0)' #for pressure regulating
+
+class Walls(SubDomain):
+    def inside(self, x, on_boundary):
+        return ((near(x[1], 0.0) or near(x[1], 1.0)) and on_boundary )
+        #return ((x[1]< 0.0+1.0/24.0) or (x[1] > 1.0-1.0/24.0)) and on_boundary
+        #return (not (near(x[0], 4.0) or near(x[0], 0.0))) and on_boundary
+        # First two appear to be equivalent. Last one DOES NOT work, not sure why
 walls = '(near(x[1], 0.0) || near(x[1], 1.0)) && on_boundary'
-corner = 'near(x[0], 1.0) && near(x[1], 1.0)' #for pressure regulating
 
-bcu_inflow = DirichletBC(W.sub(0), u_in, inflow)
-bcu_walls = DirichletBC(W.sub(0), u_walls, walls)
-pressure_reg = DirichletBC(W.sub(1), Constant(0.0), corner, 'pointwise')
-bcu = [bcu_inflow, bcu_walls, pressure_reg]
 
-bcT_inletflow = DirichletBC(T, T_inlet, inflow)
+bcu_inflow = DirichletBC(W.sub(0), u_in, Inlet())
+bcu_outflow = DirichletBC(W.sub(0), u_in, Outlet())
+bcu_walls = DirichletBC(W.sub(0), u_walls, Walls())
+aux_pressure_reg = DirichletBC(W.sub(1), Constant(0.0), Corner(), 'pointwise')
+bcu = [bcu_inflow, bcu_outflow, bcu_walls, aux_pressure_reg]
+#bcu = [bcu_inflow, bcu_outflow, bcu_walls]
+
+p_inlet = Expression("T22 - C*x[0]+D", T22 = T_22, C=C, D = D, degree=2)
+p_inlet = interpolate(p_inlet, P)
+
+bcp = [DirichletBC(P, p_inlet, Inlet())]
+
+bcT_inletflow = DirichletBC(T, T_inlet, Inlet())
 bcT = [bcT_inletflow] # don't think this is necessary for one BC
 
 # Variational Problem Begin
@@ -141,17 +171,16 @@ nse_prm["nonlinear_solver"] = "newton"
 #nse_prm["newton_solver"]["linear_solver"] = "mumps" # utilizes parallel processors
 
 # Pressure transport equation with SUPG
-ap = (p + l1*dot(grad(p), u1)) * (r + h*dot(grad(r), u1)) * dx 
+ap = (p + l1*dot(grad(p), u1)) * r * dx 
 Lp = pi1 * r * dx 
 
-p1 = Function(P)
-p_problem = LinearVariationalProblem(ap, Lp, p1) # will update p1 values every time we call solver.solve()
+p_problem = LinearVariationalProblem(ap, Lp, p1, bcs = bcp) # will update p1 values every time we call solver.solve()
 p_solver = LinearVariationalSolver(p_problem)
 
 
 # Stress transport equation/Constitutive equation with SUPG
 aT = inner( tau + l1*(dot(grad(tau),u1) + dot(-skew(grad(u1)), tau) - dot(tau, -skew(grad(u1)))) \
-                    - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S + h*dot(grad(S), u1) )*dx
+                    - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S)*dx
 LT = 2.0*eta_0*inner(sym(grad(u1)), S)*dx
 
 T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcs=bcT) # will update p1 values every time we call solver.solve()
@@ -214,14 +243,14 @@ print("u h1 error = %1.4e"%errornorm(u1, u_in, "h1"))
 print("T l2 error = %1.4e"%errornorm(T1_vec, T_inlet_vec, "l2"))
 
 plt.subplot(3,3,1)
-fig = plot(u1)
-plt.title("Velocity")
-plt.colorbar(fig, label = "magnitude")
-
-plt.subplot(3,3,2)
 fig2 = plot(sqrt(inner(u1, u1)))
 plt.title("Velocity Magnitude")
 plt.colorbar(fig2, label = "magnitude")
+
+plt.subplot(3,3,2)
+fig = plot(pi1)
+plt.title("Aux Pressure")
+plt.colorbar(fig, label = "magnitude")
 
 plt.subplot(3,3,3)
 fig3 = plot(p1)
@@ -258,7 +287,7 @@ fig9 = plot(T_inlet[1,1])
 plt.title("T_22 True")
 plt.colorbar(fig9)
 
-plt.savefig("inflow_srtd_as_tensor.pdf", bbox_inches = 'tight')
+#plt.savefig("inflow_srtd_as_tensor.pdf", bbox_inches = 'tight')
 
 
 plt.show()

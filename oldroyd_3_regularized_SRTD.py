@@ -46,7 +46,7 @@ class Results:
 
 # Flow past a cylinder problem
 
-def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
+def oldroyd_3_cylinder_reg_SRTD(h, C, eta, l1, mu1, max_iter, tol, epsilon):
     # h is the meshsize
     # k is such that -k^2 is pressure gradient on the inflow, directly prop. to inflow velocity
     # eta is the kinematic viscosity
@@ -61,10 +61,22 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     width = 4.0
     cyl_rad = 0.5
     cyl_center = (1.5, 0.0)
-
-    k = 2.5 # pressure gradient 
+    
+    C=5.0 # pressure gradient 
 
     a = mu1/l1
+    
+    # we want the auxiliary pressure to be regularized at 0 pressure, so for this particular problem, we need 
+    D = (1.0-a)*l1*C*C/(4.0*eta)
+    print("D=%1.4e"%D)
+
+    # careful: auxiliary pressure only enters into NSE-like stage via gradient,
+    # so we must specify its value at a specific point/its mean value, etc.
+    # In the original variables, this is true of the pressure, so the pressure is 
+    # unique only up to a constant. However, these two cannot be chosen independently
+    # because of the transport equation linking the two, and not just their gradients
+    
+    
 
     meshfile = "meshdata/flow_cylinder_h_%.4e.h5"%h
     
@@ -79,45 +91,40 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     infile.close()
     print("Mesh loaded into FEniCS")
 
-    # Define key boundaries. probably won't use Cylinder() or Outflow() explicitly
-    class Cylinder(SubDomain):
-        def inside(self, x, on_boundary):
-            dist = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1])
-            return (on_boundary and dist <= cyl_rad*cyl_rad+h)
-        
-    class Inflow(SubDomain):
+    # Define key boundaries
+    class Inlet(SubDomain):
         def inside(self, x, on_boundary):
             return (on_boundary and near(x[0], 0.0))
     
-    class Outflow(SubDomain):
+    class Outlet(SubDomain):
         def inside(self, x, on_boundary):
-            return (on_boundary and near(x[0], width))
-    
+            return (on_boundary and near(x[0], width)) 
+        
+    class Corner(SubDomain):
+        # for pressure regulating. DO NOT include "and on_boundary". idk why it just breaks everything
+        def inside(self, x, on_boundary):
+            return (near(x[0], 0.0) and near(x[1], 1.0))
+        
     class Walls(SubDomain):
         def inside(self, x, on_boundary):
-            ceiling = near(x[1], height)
-            floor = near(x[1], 0.0)
-            cyl_bndry = (x[0]-cyl_center[0])*(x[0]-cyl_center[0]) + (x[1]-cyl_center[1])*(x[1]-cyl_center[1]) < cyl_rad*cyl_rad+h
-            return on_boundary and (ceiling or floor or cyl_bndry) and not( near(x[0], 0.0) or near(x[0], width) ) 
-        
-    class TopPoint(SubDomain):
-        # for pressure regulating
-        def inside(self, x, on_boundary):
-            return (on_boundary and near(x[0], 0.0) and near(x[1], 0.0))
+            top = near(x[1], 1.0)
+            bottom = near(x[1], 0.0)
+            cylinder = (x[0]-1.5)*(x[0]-1.5) + x[1]*x[1] <= 0.5*0.5+h
+            return on_boundary and (top or bottom or cylinder)
 
     # velocity boundary data
-    u_1_inlet = Expression("k*k*x[1]*(1-x[1])/(2*eta)", k=k, eta=eta, degree=2)
-    u_inlet = Expression(("u", "0.0"), u=u_1_inlet, degree = 2)
+    u_1_fd = Expression("C*x[1]*(1-x[1])/(2*eta)", C=C, eta=eta, degree=2)
+    u_fd = Expression(("u", "0.0"), u=u_1_fd, degree = 2)
     u_walls = Constant((0.0, 0.0))
 
-    # true pressure boundary data
-    p_inlet = Expression("(a-1)*l1*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta) - k*k*x[0]", a=a, l1=l1, k=k, eta=eta, degree=2)
-
     # stress boundary data
-    T_11 = Expression("(a+1)*l1*k*k*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, k=k, eta=eta, degree=2)
-    T_12 = Expression("k*k*(1-2*x[1])/2", k=k, degree=2)
-    T_22 = Expression("(a-1)*l1*k*k*k*k*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, k=k, eta=eta, degree=2)
+    T_11 = Expression("(a+1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
+    T_12 = Expression("-C*(2*x[1]-1)/2", C=C, degree=2)
+    T_22 = Expression("(a-1)*l1*C*C*(2*x[1]-1)*(2*x[1]-1)/(4*eta)", a=a, l1=l1, C=C, eta=eta, degree=2)
     T_inlet = Expression(("T_11", "T_12", "T_22"), T_11=T_11, T_12=T_12, T_22=T_22, degree=2)
+
+    # true pressure boundary data
+    p_inlet = Expression("T22-C*x[0]+D", T22 = T_22, C=C, D = D, degree=2)
 
     # body forces
     f = Constant((0.0, 0.0)) # no body forces
@@ -135,7 +142,7 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     Tspace = FunctionSpace(mesh, T_elem) # tensor space
     
     # Interpolate body force and BCs onto velocity FE space
-    u_inlet = interpolate(u_inlet, Wspace.sub(0).collapse()) 
+    u_fd = interpolate(u_fd, Wspace.sub(0).collapse()) 
     u_walls = interpolate(u_walls, Wspace.sub(0).collapse())
     # true pressure transport equation
     p_inlet = interpolate(p_inlet, Pspace) 
@@ -145,34 +152,39 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     f = interpolate(f, Wspace.sub(0).collapse())
 
     # Define boundary conditions for velocity and auxiliary pressure
-    bcu_inlet = DirichletBC(Wspace.sub(0), u_inlet, Inflow())
+    bcu_inlet = DirichletBC(Wspace.sub(0), u_fd, Inlet())
+    bcu_outlet = DirichletBC(Wspace.sub(0), u_fd, Outlet())
     bcu_walls = DirichletBC(Wspace.sub(0), u_walls, Walls())
-    bcAux_press = DirichletBC(Wspace.sub(1), Constant(0.0), TopPoint(), 'pointwise')
+
+    bcAux_press = DirichletBC(Wspace.sub(1), Constant(0.0), Corner(), 'pointwise')
     #bcu = [bcu_inlet, bcu_walls, bcAux_press]
-    bcu = [bcu_inlet, bcu_walls]
+    bcu = [bcu_inlet, bcu_outlet, bcu_walls, bcAux_press]
 
-    bcp_inlet = DirichletBC(Pspace, p_inlet, Inflow())
+    # pressure at inlet
+    bcp_inlet = DirichletBC(Pspace, p_inlet, Inlet())
     bcp = [bcp_inlet]
-
-    bcT_inlet = DirichletBC(Tspace, T_inlet_vec, Inflow())
+    
+    # stress at inlet
+    bcT_inlet = DirichletBC(Tspace, T_inlet_vec, Inlet())
     bcT = [bcT_inlet]
 
     # Variational Problem Begin
     #
-    # Trial Functions. Think of TrialFunctions as symbolic, and they are only used in defining the weak forms
+    # Weak form trial Functions. Think of TrialFunctions as symbolic, and they are only used in defining the weak forms
     w = TrialFunction(Wspace) # our NS-like TrialFunction
     (u,pi) = split(w) # trial functions, representing u1, pi1
-    p = TrialFunction(Pspace) # true pressure trial function for auxiliary pressure equation, representing p1
+    p = TrialFunction(Pspace) # true pressure trial function for (true) pressure transport equation, representing p1
     tau_vec = TrialFunction(Tspace) # stress trial function for stress tensor equation, representing T1
     tau = as_tensor([[tau_vec[0], tau_vec[1]], [tau_vec[1], tau_vec[2]]])
 
-    # Weak form test functions. Also think of these as symbolic, and they are only used in defining the weak forms
+    # Weak form TestFunctions. Also think of these as symbolic, and they are only used in defining the weak forms
     (v, q) = TestFunctions(Wspace) # test functions for NSE step
     r = TestFunction(Pspace) # test functions for pressure transport
     S_vec = TestFunction(Tspace) # test functions for constitutive equation
     S = as_tensor([[S_vec[0], S_vec[1]], [S_vec[1], S_vec[2]]])
 
-    # previous and next iterations. Symbolic when they are used in the weak forms, or pointers to the actual function values 
+    # previous and next iterations. 
+    # Symbolic when they are used in the weak forms, and pointers to the actual function values. Auto. initialize to zero
     #w0 = Function(W)
     u0 = Function(Vspace)    
     #pi0 = Function(P)
@@ -186,7 +198,7 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     p1 = Function(Pspace)
     T1_vec = Function(Tspace)
     
-    # Functions we'll actually return,
+    # Functions we'll actually return
     u_return = Function(Vspace)
     pi_return = Function(Pspace)
     p_return = Function(Pspace)
@@ -205,11 +217,9 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     
     L_nse = term1 - l1*(term2 + term3 + term4) + (l1-mu1)*term5 #mathcal F 
     
-    # Nonlinear in u, so must solve a-L==0 and use Newton instead of a==L directly
+    # Nonlinear in u, so must solve a-L==0 and use Newton (or some other iterative scheme)
     F = a_nse - L_nse
-
-    # Nonlinear NSE, so using Newton iteration
-    F_act = action(F, w1) 
+    F_act = action(F, w1) # nonlinear F = F(w, (v,q)), where w=(u,pi) is trial, (v,q) test. Action of F on a given trial function
     dF = derivative(F_act, w1)
     nse_problem = NonlinearVariationalProblem(F_act, w1, bcu, dF) # will update w1 values every time we call solver.solve()
     nse_solver = NonlinearVariationalSolver(nse_problem)
@@ -217,13 +227,11 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
     nse_prm["nonlinear_solver"] = "newton"
     nse_prm["newton_solver"]["linear_solver"] = "mumps" # utilizes parallel processors
 
-    # Regularized Pressure transport equation. Returns to original transport equation if epsilon=0
+    # (Regularized) Pressure transport equation. Returns to original transport equation if epsilon=0
     ap = (epsilon*dot(grad(p), grad(r)) + (p + l1*dot(grad(p), u1)) * r )* dx 
     Lp = pi1 * r * dx 
     
-    p1 = Function(Pspace)
-    p_problem = LinearVariationalProblem(a=ap, L=Lp, u=p1, bcs = bcp) # will update p1 values every time we call solver.solve()
-    #p_problem = LinearVariationalProblem(ap, Lp, p1) # will update p1 values every time we call solver.solve()
+    p_problem = LinearVariationalProblem(ap, Lp, p1, bcp) # will update p1 values every time we call solver.solve()
     p_solver = LinearVariationalSolver(p_problem)
 
     # Stress transport equation/Constitutive equation
@@ -231,10 +239,10 @@ def oldroyd_3_cylinder_reg_SRTD(h, k, eta, l1, mu1, max_iter, tol, epsilon):
                         - mu1*(dot(sym(grad(u1)), tau) + dot(tau, sym(grad(u1)))) , S)*dx
     LT = 2.0*eta*inner(sym(grad(u1)), S)*dx
 
-    T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcs = bcT) # will update T1_vec values every time we call solver.solve()
+    T_problem = LinearVariationalProblem(aT, LT, T1_vec, bcT) # will update T1_vec values every time we call solver.solve()
     T_solver = LinearVariationalSolver(T_problem)
     T_prm = T_solver.parameters
-    T_prm["linear_solver"] = "mumps"
+    T_prm["linear_solver"] = "mumps" # utilizes parallel processors because discretized stress tensor can have many dof
 
     # Begin SRTD iterative solve
     n=1

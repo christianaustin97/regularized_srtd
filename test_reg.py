@@ -22,7 +22,7 @@ tol = 1e-8
 # FPC Problem
 print("Solving the unregularized solution")
 print("\n ========================================================================================================================== \n")
-soln_fpc_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 2.5, eta, l1, mu1, max_iters, tol, 0.0)
+soln_fpc_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 5.0, eta, l1, mu1, max_iters, tol, 0.0)
 u_unreg = soln_fpc_unreg.velocity
 p_unreg = soln_fpc_unreg.pressure
 T_unreg = soln_fpc_unreg.stress_tensor_vec
