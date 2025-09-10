@@ -6,7 +6,7 @@ import oldroyd_3_regularized_SRTD
 import matplotlib.pyplot as plt
 
 
-h=0.025 
+h=0.05
 rad = 0.5
 ecc = 0.25
 s = 1.0
@@ -25,6 +25,7 @@ print("\n ======================================================================
 soln_fpc_unreg = oldroyd_3_regularized_SRTD.oldroyd_3_cylinder_reg_SRTD(h, 5.0, eta, l1, mu1, max_iters, tol, 0.0)
 u_unreg = soln_fpc_unreg.velocity
 p_unreg = soln_fpc_unreg.pressure
+pi_unreg = soln_fpc_unreg.aux_pressure
 T_unreg = soln_fpc_unreg.stress_tensor_vec
 
 u_mag = dot(u_unreg, u_unreg)
@@ -34,33 +35,43 @@ T_22 = T_unreg[2]
 
 plt.figure()
 
-#plt.subplot(2,2,1)
+plt.subplot(3,2,1)
 magplot = plot(u_mag)
 plt.colorbar(magplot)
 plt.title("Squared Magnitude of $\mathbf{u}$")
-plt.show()
-input("Press any key to continue...")
 
-plt.figure() #plt.subplot(2,2,2)
+plt.subplot(3,2,3)
 pplot = plot(p_unreg)
 plt.title("Pressure")
 plt.colorbar(pplot)
-plt.show()
-input("Press any key to continue...")
 
-plt.subplot(2,2,3)
-plot(T_11)
+plt.subplot(3,2,5)
+piplot = plot(pi_unreg)
+plt.title("Aux Pressure")
+plt.colorbar(piplot)
+
+
+plt.subplot(3,2,2)
+t11plot = plot(T_11)
 plt.title("Normal Stress Component $T_{11}$")
+plt.colorbar(t11plot)
 
-plt.subplot(2,2,4)
-plot(T_12)
+plt.subplot(3,2,4)
+t12plot = plot(T_12)
 plt.title("Shear Stress Component $T_{12}$")
+plt.colorbar(t12plot)
+
+plt.subplot(3,2,6)
+t22plot = plot(T_22)
+plt.title("Shear Stress Component $T_{22}$")
+plt.colorbar(t22plot)
+
 
 plt.show()
 
 input("Press any key to continue...")
 
-"""
+
 #unregularized SRTD solution
 print("Solving the unregularized solution")
 print("\n ========================================================================================================================== \n")
@@ -141,7 +152,6 @@ plt.ylabel("$\mathbf{T}$ $ H^{1}$ difference")
 
 plt.show()
 
-"""
 
 
 
