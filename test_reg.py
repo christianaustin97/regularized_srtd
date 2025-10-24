@@ -19,6 +19,27 @@ max_iters = 20
 tol = 1e-8
 
 
+from fenics import *
+from meshdata import gen_mesh_cylinder
+import os
+meshfile = "meshdata/flow_cylinder_h_%.4e.h5"%h
+    
+if not os.path.exists(meshfile):
+    print("Creating mesh...")
+    gen_mesh_cylinder.main(h)
+
+#then, simply read the mesh in 
+mesh = Mesh() #empty mesh
+infile = HDF5File(MPI.comm_world, meshfile, 'r')
+infile.read(mesh, '/mesh', True) #for some reason, need this flag to import a mesh?
+infile.close()
+print("Mesh loaded into FEniCS")
+plot(mesh)
+plt.show()
+
+
+
+
 # FPC Problem
 print("Solving the unregularized solution")
 print("\n ========================================================================================================================== \n")
@@ -36,14 +57,18 @@ T_22 = T_unreg[2]
 plt.figure()
 
 plt.subplot(3,2,1)
+#plt.figure()
 magplot = plot(u_mag)
 plt.colorbar(magplot)
 plt.title("Squared Magnitude of $\mathbf{u}$")
+#plt.show()
 
 plt.subplot(3,2,3)
+#plt.figure()
 pplot = plot(p_unreg)
 plt.title("Pressure")
 plt.colorbar(pplot)
+#plt.show()
 
 plt.subplot(3,2,5)
 piplot = plot(pi_unreg)
